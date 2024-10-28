@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.6;
+
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/Pausable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+contract MonToken is ERC20, Ownable, Pausable, ReentrancyGuard {
+    // Constants
+    uint256 private constant INITIAL_SUPPLY = 1000000 * 10**18; // 1 million tokens
+    uint256 private constant MAX_SUPPLY = 2000000 * 10**18;    // 2 million tokens max
+    
+    // State variables
+    uint256 private immutable i_deployTime;
+    uint256 public mintPrice;
+    
+    // Events
+    event MintPriceChanged(uint256 indexed newPrice, uint256 timestamp);
+    event TokensMinted(address indexed to, uint256 amount, uint256 cost);
+    event TokensBurned(address indexed from, uint256 amount);
+    
+    // Modifiers
+    modifier validAmount(uint256 amount) {
+        require(amount > 0, "Amount must be > 0");
+        require(totalSupply() + amount <= MAX_SUPPLY, "Exceeds max supply");
+        _;
+    }
+    
+    constructor(uint256 _initialMintPrice) ERC20("MonToken", "MTK") Ownable(msg.sender) {
+        mintPrice = _initialMintPrice;
+        i_deployTime = block.timestamp;
+        _mint(msg.sender, INITIAL_SUPPLY);
+    }
+
+    /**
+     * @notice Mint new tokens
+     * @param amount Amount of tokens to mint
+     */
+    function mint(uint256 amount) 
+        external 
+        payable 
+        whenNotPaused 
+        nonReentrant 
+        validAmount(amount) 
+    {
+        require(msg.value >= amount * mintPrice, "Insufficient ETH");
+        
+        _mint(msg.sender, amount);
+        emit TokensMinted(msg.sender, amount, msg.value);
+        
+        // Refund excess ETH if any
+        uint256 excess = msg.value - (amount * mintPrice);
+        if (excess > 0) {
+            (bool success, ) = payable(msg.sender).call{value: excess}("");
+            require(success, "ETH refund failed");
+        }
+    }
+
+    /**
+     * @notice Set new mint price
+     * @param newPrice New price for minting
+     */
+    function setMintPrice(uint256 newPrice) external onlyOwner {
+        require(newPrice > 0, "Price must be > 0");
+        mintPrice = newPrice;
+        emit MintPriceChanged(newPrice, block.timestamp);
+    }
+
+    /**
+     * @notice Withdraw contract balance
+     */
+    function withdraw() external onlyOwner nonReentrant {
+        uint256 balance = address(this).balance;
+        require(balance > 0, "No balance to withdraw");
+        
+        (bool success, ) = payable(owner()).call{value: balance}("");
+        require(success, "Withdrawal failed");
+    }
+
+    /**
+     * @notice Burn tokens
+     * @param amount Amount to burn
+     */
+    function burn(uint256 amount) external whenNotPaused {
+        require(amount <= balanceOf(msg.sender), "Insufficient balance");
+        _burn(msg.sender, amount);
+        emit TokensBurned(msg.sender, amount);
+    }
+
+    /**
+     * @notice Emergency pause of contract
+     */
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /**
+     * @notice Unpause contract
+     */
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    // View functions
+    function getMintPrice() external view returns (uint256) {
+        return mintPrice;
+    }
+
+    function getMaxSupply() external pure returns (uint256) {
+        return MAX_SUPPLY;
+    }
+
+    function getRemainingSupply() external view returns (uint256) {
+        return MAX_SUPPLY - totalSupply();
+    }
+
+    function getDeployTime() external view returns (uint256) {
+        return i_deployTime;
+    }
+
+    // Override required function
+    function _update(address from, address to, uint256 value) internal virtual override whenNotPaused {
+        super._update(from, to, value);
+    }
